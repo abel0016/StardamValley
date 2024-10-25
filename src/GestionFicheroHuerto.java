@@ -5,7 +5,8 @@ import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Random;
+import java.util.HashMap;
+import java.util.Map;
 
 public class GestionFicheroHuerto {
 
@@ -18,6 +19,114 @@ public class GestionFicheroHuerto {
     private static final Boolean VALOR_DEFECTO_BOOLEAN=false;
     GestionFPropiedades conf=GestionFPropiedades.getInstancia();
 
+    public Map<String, Integer> cuidarHuerto(Map<Integer, Semilla> mapaSemillasPorClave) {
+        int filasHuerto = Integer.parseInt(conf.getPropiedad("filasHuerto"));
+        int columnasHuerto = Integer.parseInt(conf.getPropiedad("columnasHuerto"));
+        Map<String, Integer> almacen = new HashMap<>();
+
+        try (RandomAccessFile raf = new RandomAccessFile(new File(RUTA_FICHERO), "rw")) {
+            raf.seek(0); // Posicionar el puntero al inicio del archivo
+
+            for (int columna = 0; columna < columnasHuerto; columna++) {
+                // Usar isColumnaVacia para verificar si toda la columna está vacía
+                if (isColumnaVacia(columna)) {
+                    // Si la columna está vacía, saltar a la siguiente columna sin procesar filas
+                    raf.seek(raf.getFilePointer() + filasHuerto * TAMANIO_REGISTRO);
+                    continue;
+                }
+
+                for (int fila = 0; fila < filasHuerto; fila++) {
+                    long desplazamiento = (fila * columnasHuerto + columna) * TAMANIO_REGISTRO;
+                    raf.seek(desplazamiento);
+
+                    int idSemilla = raf.readInt(); // Leer el ID de la semilla en la celda
+                    if (idSemilla == VALOR_DEFECTO_ENTERO) {
+                        // Si la celda está vacía, saltar a la siguiente celda
+                        raf.seek(desplazamiento + TAMANIO_REGISTRO);
+                        continue;
+                    }
+
+                    boolean regado = raf.readBoolean();
+                    int diasPlantado = raf.readInt();
+
+                    // Obtener la semilla del mapa por su ID
+                    Semilla semilla = mapaSemillasPorClave.get(idSemilla);
+                    if (semilla == null) continue; // Si no encuentra la semilla, omitir
+
+                    // Regar la planta: marcarla como regada
+                    raf.seek(desplazamiento + TAMANIO_ID_SEMILLA); // Posicionarse en el campo booleano
+                    raf.writeBoolean(true);
+
+                    // Verificar si la planta está lista para la cosecha
+                    if (diasPlantado >= semilla.getDiasCrecimiento()) {
+                        // Cosechar: actualizar el almacen con los frutos cosechados
+                        int cantidadFrutos = semilla.getMaxFrutos();
+                        almacen.put(semilla.getNombre(), almacen.getOrDefault(semilla.getNombre(), 0) + cantidadFrutos);
+
+                        // Restablecer la celda a sus valores por defecto
+                        raf.seek(desplazamiento);
+                        raf.writeInt(VALOR_DEFECTO_ENTERO);
+                        raf.writeBoolean(VALOR_DEFECTO_BOOLEAN);
+                        raf.writeInt(VALOR_DEFECTO_ENTERO);
+                    } else {
+                        // Incrementar los días plantados si no está lista para cosecha
+                        raf.seek(desplazamiento + TAMANIO_ID_SEMILLA + TAMANIO_REGADA);
+                        raf.writeInt(diasPlantado + 1);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new RuntimeException("Error al cuidar el huerto.", e);
+        }
+
+        return almacen; // Devolver el mapa con la cantidad de frutos cosechados
+    }
+
+    public void plantarSemillaColumna(Semilla semilla, int columna) {
+        // Verificar si toda la columna está vacía antes de plantar
+        if (isColumnaVacia(columna)) {
+            int filasHuerto = Integer.parseInt(conf.getPropiedad("filasHuerto"));
+            int columnasHuerto = Integer.parseInt(conf.getPropiedad("columnasHuerto"));
+
+            try (RandomAccessFile raf = new RandomAccessFile(new File(RUTA_FICHERO), "rw")) {
+                for (int fila = 0; fila < filasHuerto; fila++) {
+                    // Calcular el offset de la celda específica en la columna
+                    long desplazamiento = (fila * columnasHuerto + columna) * TAMANIO_REGISTRO;
+                    raf.seek(desplazamiento);
+
+                    // Escribir los datos de la semilla en la celda
+                    raf.writeInt(semilla.getId());             // Escribir el id de la semilla
+                    raf.writeBoolean(VALOR_DEFECTO_BOOLEAN);   // Estado de regado inicial
+                    raf.writeInt(0);                           // Días de crecimiento inicial
+                }
+                System.out.println("Semilla plantada en toda la columna " + columna);
+            } catch (IOException e) {
+                throw new RuntimeException("Error al plantar la semilla en la columna", e);
+            }
+        } else {
+            System.out.println("La columna " + columna + " ya tiene semillas plantadas!");
+        }
+    }
+
+    //metodo para comprobar si la columna en la que queremos plantar esta vacia
+    public boolean isColumnaVacia(int columna) {
+        int filasHuerto = Integer.parseInt(conf.getPropiedad("filasHuerto"));
+        try (RandomAccessFile raf = new RandomAccessFile(RUTA_FICHERO, "r")) {
+            for (int fila = 0; fila < filasHuerto; fila++) {
+                long desplazamiento = (fila * Integer.parseInt(conf.getPropiedad("columnasHuerto")) + columna) * TAMANIO_REGISTRO;
+                raf.seek(desplazamiento);
+
+                // Verifica si el id de semilla en esta celda es el valor de defecto
+                int idSemilla = raf.readInt();
+                if (idSemilla != VALOR_DEFECTO_ENTERO) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (IOException e) {
+            throw new RuntimeException("Error al verificar si la columna está vacía", e);
+        }
+    }
 
     public void actualizarHuertoNuevoDia(){
         //aquí queremos que si la semilla fue regada el dia anterior aumentar el valor de numdias
